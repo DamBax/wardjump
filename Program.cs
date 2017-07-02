@@ -1,299 +1,181 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using SharpDX;
 using EloBuddy;
-using EloBuddy.SDK.Events;
-using EloBuddy.SDK.Menu;
-using EloBuddy.SDK.Enumerations;
 using EloBuddy.SDK;
-using EloBuddy.SDK.Menu.Values;
+using SharpDX;
 
-namespace WardJump
+namespace LeeSin
 {
-    public static class Program
+    public static class WardManager
     {
-        public static Menu Menu;
-        public static Spell.Targeted W;
-        public static Vector2 JumpPos;
-        private static Vector3 lastWardPos;
-        private static float wcasttime;
-        private static readonly bool castWardAgain = true;
-        public static int LastWard, LastQ2;
-        private static bool reCheckWard = true;
+        public static float WardRange = 600f;
 
-
-        private static Vector3 mouse = Game.CursorPos;
-
-        private enum WCastStage
+        private static readonly Item[] ItemWards =
         {
-            First,
+            new Item(ItemId.Ruby_Sightstone, WardRange),
+            new Item(ItemId.Sightstone, WardRange),
+            new Item(ItemId.Eye_of_the_Watchers, WardRange), new Item(ItemId.Eye_of_the_Oasis, WardRange), new Item(ItemId.Eye_of_the_Equinox, WardRange),
+            new Item(ItemId.Trackers_Knife, WardRange), new Item(ItemId.Trackers_Knife_Enchantment_Cinderhulk, WardRange), new Item(ItemId.Trackers_Knife_Enchantment_Runic_Echoes, WardRange), new Item(ItemId.Trackers_Knife_Enchantment_Warrior, WardRange),
+            new Item(ItemId.Warding_Totem_Trinket, WardRange),
+            new Item(ItemId.Greater_Stealth_Totem_Trinket, WardRange), new Item(ItemId.Explorers_Ward, WardRange),
+            new Item(ItemId.Greater_Vision_Totem_Trinket, WardRange), new Item(ItemId.Control_Ward, WardRange),
+        };
 
-            Second,
+        private static List<Obj_AI_Minion> _wardsAvailable;
+        private static Vector3 _lastWardJumpVector = Vector3.Zero;
+        private static float _lastWardJumpTime;
+        public static float LastWardCreated;
 
-            Cooldown
-        }
-        public static bool jumped;
-        private static AIHeroClient myHero
+        public static bool IsTryingToJump
         {
-            get { return Player.Instance; }
-        }
-        public static void Main()
-        {
-            Loading.OnLoadingComplete += OnLoad;
+            get { return _lastWardJumpVector != Vector3.Zero && Game.Time - _lastWardJumpTime < 1.25f; }
         }
 
-        private static void OnLoad(EventArgs args)
+        public static bool CanWardJump
         {
-            if (myHero.Hero != Champion.LeeSin)
+            get { return CanCastWard && SpellManager.CanCastW1; }
+        }
+
+        public static bool CanCastWard
+        {
+            get { return Game.Time - _lastWardJumpTime > 1.25f && IsReady; }
+        }
+
+        public static bool IsReady
+        {
+            get { return ItemWards.Any(i => i.IsReady()); }
+        }
+
+        private static Item GetItem
+        {
+            get { return ItemWards.FirstOrDefault(i => i.IsReady()); }
+        }
+
+        public static void Init()
+        {
+            Game.OnUpdate += Game_OnTick;
+
+            Obj_AI_Base.OnProcessSpellCast += Obj_AI_Base_OnProcessSpellCast;
+
+            GameObject.OnCreate += Obj_Ward_OnCreate;
+            GameObject.OnDelete += Obj_Ward_OnDelete;
+            _wardsAvailable = new List<Obj_AI_Minion>();
+            Core.DelayAction(delegate {
+                _wardsAvailable =
+                    ObjectManager.Get<Obj_AI_Minion>().Where(m => m.IsValid && !m.IsDead && m.IsWard()).ToList();
+            }, 500);
+            //Shop.OnBuyItem += Shop_OnBuyItem;
+        }
+        
+        private static void Shop_OnBuyItem(AIHeroClient sender, ShopActionEventArgs args)
+        {
+            Chat.Print(args.Id);
+        }
+
+        public static void CastWardTo(Vector3 position)
+        {
+            if (CanWardJump)
             {
-                return;
-            }
-
-            Menu = MainMenu.AddMenu("Lee WardJumper", "wardjumper");
-            Menu.AddGroupLabel("Ward Jump Settings");
-            Menu.Add("ElLeeSin.Wardjump", new KeyBind("Wardjump :", false, KeyBind.BindTypes.HoldActive, 'G'));
-            Menu.Add("ElLeeSin.Wardjump.MaxRange", new CheckBox("Ward jump on max range", false));
-            Menu.Add("ElLeeSin.Wardjump.Mouse", new CheckBox("Jump to mouse"));
-            Menu.Add("ElLeeSin.Wardjump.Minions", new CheckBox("Jump to minions"));
-            Menu.Add("ElLeeSin.Wardjump.Champions", new CheckBox("Jump to champions"));
-
-
-            W = new Spell.Targeted(SpellSlot.W, 700);
-
-            Game.OnTick += OnTick;
-            Drawing.OnDraw += Drawing_OnDraw;
-        }
-
-        private static void Drawing_OnDraw(EventArgs args)
-        {
-           
-         
-        }
-
-        public static void Orbwalk(Vector3 pos, AIHeroClient target = null)
-        {
-            Player.IssueOrder(GameObjectOrder.MoveTo, pos);
-        }
-
-        private static void OnTick(EventArgs args)
-        {
-            if (ElLeeSinWardjump)
-            {
-                Orbwalk(Game.CursorPos);
-                WardjumpToMouse();
-            }
-  
-        }
-
-
-
-        public static bool ElLeeSinWardjump { get { return Menu["ElLeeSin.Wardjump"].Cast<KeyBind>().CurrentValue; } }
-        public static bool ElLeeSinWardjumpMaxRange { get { return Menu["ElLeeSin.Wardjump.MaxRange"].Cast<CheckBox>().CurrentValue; } }
-        public static bool ElLeeSinWardjumpMouse { get { return Menu["ElLeeSin.Wardjump.Mouse"].Cast<CheckBox>().CurrentValue; } }
-        public static bool ElLeeSinWardjumpMinions { get { return Menu["ElLeeSin.Wardjump.Minions"].Cast<CheckBox>().CurrentValue; } }
-        public static bool ElLeeSinWardjumpChampions { get { return Menu["ElLeeSin.Wardjump.Champions"].Cast<CheckBox>().CurrentValue; } }
-
-        private static Vector2 V2E(Vector3 from, Vector3 direction, float distance)
-        {
-            return from.To2D() + distance * Vector3.Normalize(direction - from).To2D();
-        }
-
-        private static Vector3 InterceptionPoint(List<AIHeroClient> heroes)
-        {
-            var result = new Vector3();
-            foreach (var hero in heroes)
-            {
-                result += hero.Position;
-            }
-            result.X /= heroes.Count;
-            result.Y /= heroes.Count;
-            return result;
-        }
-
-        private static SpellDataInst GetItemSpell(InventorySlot invSlot)
-        {
-            return myHero.Spellbook.Spells.FirstOrDefault(spell => (int)spell.Slot == invSlot.Slot + 4);
-        }
-
-        public static InventorySlot FindBestWardItem()
-        {
-            try
-            {
-                var slot = GetWardSlot();
-                if (slot == default(InventorySlot))
+                var endPos = Util.MyHero.Position +
+                             (position - Util.MyHero.Position).Normalized() *
+                             Math.Min(WardRange, Util.MyHero.Distance(position));
+                var ward = GetItem;
+                if (ward != null)
                 {
-                    return null;
-                }
-
-                var sdi = GetItemSpell(slot);
-                if (sdi != default(SpellDataInst) && sdi.State == SpellState.Ready)
-                {
-                    return slot;
-                }
-                return slot;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex);
-            }
-
-            return null;
-        }
-
-        public static InventorySlot GetWardSlot()
-        {
-            var wardIds = new[] { 2045, 2049, 2050, 2301, 2302, 2303, 3340, 3361, 3362, 3711, 1408, 1409, 1410, 1411, 2043 };
-            return (from wardId in wardIds where Item.CanUseItem(wardId) select ObjectManager.Player.InventoryItems.FirstOrDefault(slot => slot.Id == (ItemId)wardId)).FirstOrDefault();
-        }
-
-        private static WCastStage WStage
-        {
-            get
-            {
-                if (!W.IsReady())
-                {
-                    return WCastStage.Cooldown;
-                }
-
-                return (ObjectManager.Player.Spellbook.GetSpell(SpellSlot.W).Name == "blindmonkwtwo" ? WCastStage.Second : WCastStage.First);
-            }
-        }
-
-        private static void CastW(Obj_AI_Base obj)
-        {
-            if (500 >= Environment.TickCount - wcasttime || WStage != WCastStage.First)
-            {
-                return;
-            }
-
-            W.Cast(obj);
-            wcasttime = Environment.TickCount;
-        }
-
-        private static void WardJump(Vector3 pos, bool m2M = true, bool maxRange = false, bool reqinMaxRange = false, bool minions = true, bool champions = true)
-        {
-            if (WStage != WCastStage.First)
-            {
-                return;
-            }
-
-            var basePos = myHero.Position.To2D();
-            var newPos = (pos.To2D() - myHero.Position.To2D());
-
-            if (JumpPos == new Vector2())
-            {
-                if (reqinMaxRange)
-                {
-                    JumpPos = pos.To2D();
-                }
-                else if (maxRange || myHero.Distance(pos) > 590)
-                {
-                    JumpPos = basePos + (newPos.Normalized() * (590));
-                }
-                else
-                {
-                    JumpPos = basePos + (newPos.Normalized() * (myHero.Distance(pos)));
+                    ward.Cast(endPos);
+                    LastWardCreated = Game.Time;
+                    _lastWardJumpVector = endPos;
+                    _lastWardJumpTime = Game.Time;
                 }
             }
+        }
 
-            if (JumpPos != new Vector2() && reCheckWard)
+        public static void JumpToVector(Vector3 position)
+        {
+            if (SpellManager.CanCastW1)
             {
-                reCheckWard = false;
-                Core.DelayAction(delegate
+                var ward = GetNearestTo(position);
+                if (ward != null && position.To2D().Distance(ward.Position.To2D(), true) < Math.Pow(250f, 2))
                 {
-                    if (JumpPos != new Vector2())
+                    SpellManager.CastW1(ward);
+                }
+            }
+        }
+
+        private static void Game_OnTick(EventArgs args)
+        {
+            if (IsTryingToJump)
+            {
+                JumpToVector(_lastWardJumpVector);
+            }
+            _wardsAvailable.RemoveAll(w => !w.IsValid || w.IsDead);
+        }
+
+        private static void Obj_AI_Base_OnProcessSpellCast(Obj_AI_Base sender, GameObjectProcessSpellCastEventArgs args)
+        {
+            if (sender.IsMe)
+            {
+                if (args.SData.Name.Equals(SpellSlot.W.GetSpellDataInst().SData.Name) &&
+                    args.SData.Name.ToLower().Contains("one"))
+                {
+                    _lastWardJumpVector = Vector3.Zero;
+                }
+            }
+        }
+
+        private static bool IsWard(this GameObject sender)
+        {
+            return sender is Obj_AI_Minion && sender.Team == Util.MyHero.Team && sender.Name != null &&
+                   (sender.Name.ToLower().Contains("sightward") || sender.Name.ToLower().Contains("visionward"));
+        }
+
+        private static void Obj_Ward_OnCreate(GameObject sender, EventArgs args)
+        {
+            if (sender.IsWard())
+            {
+                var ward = sender as Obj_AI_Minion;
+                _wardsAvailable.Add(ward);
+                LastWardCreated = Game.Time;
+                if (IsTryingToJump)
+                {
+                    if (ward != null &&
+                        _lastWardJumpVector.To2D().Distance(ward.Position.To2D(), true) < Math.Pow(80, 2))
                     {
-                        JumpPos = new Vector2();
-                        reCheckWard = true;
-                    }
-                }, 20);
-            }
-
-            if (m2M)
-            {
-                Orbwalk(pos);
-            }
-
-            if (!W.IsReady() || WStage != WCastStage.First || reqinMaxRange && myHero.Distance(pos) > W.Range)
-            {
-                return;
-            }
-
-            if (minions || champions)
-            {
-                if (champions)
-                {
-                    var champs = (from champ in ObjectManager.Get<AIHeroClient>() where champ.IsAlly && champ.Distance(myHero) < W.Range && champ.Distance(pos) < 200 && !champ.IsMe select champ).ToList();
-                    if (champs.Count > 0 && WStage == WCastStage.First)
-                    {
-                        if (500 >= Environment.TickCount - wcasttime || WStage != WCastStage.First)
-                        {
-                            return;
-                        }
-
-                        CastW(champs[0]);
-                        return;
-                    }
-                }
-                if (minions)
-                {
-                    var minion2 = (from minion in ObjectManager.Get<Obj_AI_Minion>() where minion.IsAlly && minion.Distance(myHero) < W.Range && minion.Distance(pos) < 200 && !minion.Name.ToLower().Contains("ward") select minion).ToList();
-                    if (minion2.Count > 0 && WStage == WCastStage.First)
-                    {
-                        if (500 >= Environment.TickCount - wcasttime || WStage != WCastStage.First)
-                        {
-                            return;
-                        }
-
-                        CastW(minion2[0]);
-                        return;
-                    }
-                }
-            }
-
-            var isWard = false;
-            foreach (var ward in ObjectManager.Get<Obj_AI_Base>())
-            {
-                if (ward.IsAlly && ward.Name.ToLower().Contains("ward") && ward.Distance(JumpPos) < 200)
-                {
-                    isWard = true;
-                    if (500 >= Environment.TickCount - wcasttime || WStage != WCastStage.First)
-                    {
-                        return;
-                    }
-
-                    CastW(ward);
-                    wcasttime = Environment.TickCount;
-                }
-            }
-
-            if (!isWard && castWardAgain)
-            {
-                if (Game.Time - LastWard >= 3)
-                {
-                    var ward = FindBestWardItem();
-                    if (ward != null || WStage != WCastStage.First)
-                    {
-                        if (ward != null)
-                        {
-                            myHero.Spellbook.CastSpell(ward.SpellSlot, JumpPos.To3D());
-                        }
-
-                        lastWardPos = JumpPos.To3D();
-                        LastWard = (int)Game.Time;
+                        SpellManager.CastW1(ward);
                     }
                 }
             }
         }
 
-        private static void WardjumpToMouse()
+        private static void Obj_Ward_OnDelete(GameObject sender, EventArgs args)
         {
-            WardJump(Game.CursorPos, ElLeeSinWardjumpMouse, ElLeeSinWardjumpMaxRange, false, ElLeeSinWardjumpMinions, ElLeeSinWardjumpChampions);
+            if (sender.IsWard())
+            {
+                var ward = sender as Obj_AI_Minion;
+                _wardsAvailable.RemoveAll(m => ward != null && m.NetworkId == ward.NetworkId);
+            }
         }
 
-    }
-     
-     
+        public static Obj_AI_Minion GetNearestTo(Vector3 position)
+        {
+            return
+                _wardsAvailable.Where(
+                    m =>
+                        m.IsValid && !m.IsDead &&
+                        Util.MyHero.Distance(m, true) <= Math.Pow(SpellManager.W1Range + SpellManager.WExtraRange, 2))
+                    .OrderBy(m => m.Distance(position, true))
+                    .FirstOrDefault();
+        }
+
+        public static Obj_AI_Minion GetFurthestTo(Vector3 position)
+        {
+            return
+                _wardsAvailable.Where(
+                    m =>
+                        m.IsValid && !m.IsDead &&
+                        Util.MyHero.Distance(m, true) <= Math.Pow(SpellManager.W1Range + SpellManager.WExtraRange, 2))
+                    .OrderBy(m => m.Distance(position, true))
+                    .LastOrDefault();
+        }
     }
